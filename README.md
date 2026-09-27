@@ -541,6 +541,9 @@ CREATE TABLE dbo.fact_clinical_telemetry (
 GO
 ```
 
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/d9abb496-60a4-4b46-a6d3-24f2fe32405a" />
+
+
 The schema follows a simple star pattern. One dimension table, dim_patient_registry, holds identity and demographic detail at the center. Two fact tables radiate outward, each tied back through a formal foreign key on patient_key. Days overdue and hours to doctor are computed columns, recalculated live on every query rather than stored values, and the foreign key constraint makes an orphaned record structurally impossible from this point forward.
 
 ---
