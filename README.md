@@ -250,7 +250,7 @@ Transformation moved the data into its new home. This pass tightens exactly how 
 ```sql
 --DATA CLEANING PHASE:
 --Clean patient registry table
--- Enforce clean string trimming, case overrides, and regional date conversions
+-- Enforce clean string trimming, case overrides, proper case standardization, and regional date conversions
 INSERT INTO dbo.dim_patient_registry (
     patient_id, 
     full_name, 
@@ -264,10 +264,21 @@ INSERT INTO dbo.dim_patient_registry (
 )
 SELECT 
     UPPER(TRIM(patient_id)) AS patient_id,
-    TRIM(full_name) AS full_name,
-    -- Feature Engineering: Separate merged names into relational slots
-    TRIM(LEFT(TRIM(full_name), CHARINDEX(' ', TRIM(full_name) + ' ') - 1)) AS first_name,
-    TRIM(REVERSE(LEFT(REVERSE(TRIM(full_name)), CHARINDEX(' ', REVERSE(TRIM(full_name)) + ' ') - 1))) AS last_name,
+    
+    -- Data Cleaning: Proper Case Full Name (Stitch the proper first and last names together)
+    UPPER(LEFT(TRIM(LEFT(TRIM(full_name), CHARINDEX(' ', TRIM(full_name) + ' ') - 1)), 1)) + 
+    LOWER(SUBSTRING(TRIM(LEFT(TRIM(full_name), CHARINDEX(' ', TRIM(full_name) + ' ') - 1)), 2, LEN(TRIM(LEFT(TRIM(full_name), CHARINDEX(' ', TRIM(full_name) + ' ') - 1))))) + 
+    ' ' + 
+    UPPER(LEFT(TRIM(REVERSE(LEFT(REVERSE(TRIM(full_name)), CHARINDEX(' ', REVERSE(TRIM(full_name)) + ' ') - 1))), 1)) + 
+    LOWER(SUBSTRING(TRIM(REVERSE(LEFT(REVERSE(TRIM(full_name)), CHARINDEX(' ', REVERSE(TRIM(full_name)) + ' ') - 1))), 2, LEN(TRIM(REVERSE(LEFT(REVERSE(TRIM(full_name)), CHARINDEX(' ', REVERSE(TRIM(full_name)) + ' ') - 1)))))) AS full_name,
+    
+    -- Feature Engineering: Separate merged names into proper cased relational slots
+    UPPER(LEFT(TRIM(LEFT(TRIM(full_name), CHARINDEX(' ', TRIM(full_name) + ' ') - 1)), 1)) + 
+    LOWER(SUBSTRING(TRIM(LEFT(TRIM(full_name), CHARINDEX(' ', TRIM(full_name) + ' ') - 1)), 2, LEN(TRIM(LEFT(TRIM(full_name), CHARINDEX(' ', TRIM(full_name) + ' ') - 1))))) AS first_name,
+    
+    UPPER(LEFT(TRIM(REVERSE(LEFT(REVERSE(TRIM(full_name)), CHARINDEX(' ', REVERSE(TRIM(full_name)) + ' ') - 1))), 1)) + 
+    LOWER(SUBSTRING(TRIM(REVERSE(LEFT(REVERSE(TRIM(full_name)), CHARINDEX(' ', REVERSE(TRIM(full_name)) + ' ') - 1))), 2, LEN(TRIM(REVERSE(LEFT(REVERSE(TRIM(full_name)), CHARINDEX(' ', REVERSE(TRIM(full_name)) + ' ') - 1)))))) AS last_name,
+    
     -- Data Cleaning: Programmatically untangle mixed regional date configurations
     CASE 
         WHEN dob LIKE '%/%/%' AND CHARINDEX('/', dob) = 5 THEN CONVERT(DATE, dob, 111) -- YYYY/MM/DD
@@ -275,12 +286,14 @@ SELECT
         WHEN dob LIKE '%-%-%' THEN CONVERT(DATE, dob, 105) -- DD-MM-YYYY
         ELSE NULL 
     END AS date_of_birth,
+    
     -- Data Cleaning: Normalize loose categorical tokens (M, Male, F, Female)
     CASE 
         WHEN UPPER(LEFT(LTRIM(gender), 1)) = 'M' THEN 'M'
         WHEN UPPER(LEFT(LTRIM(gender), 1)) = 'F' THEN 'F'
         ELSE 'U' 
     END AS gender,
+    
     -- Data Cleaning: Map insurance provider blanks to uniform fallbacks
     CASE 
         WHEN UPPER(TRIM(ISNULL(insurance_provider, ''))) IN ('UNKNOWN', 'N/A', '') THEN 'Uninsured' 
@@ -290,16 +303,45 @@ SELECT
     GETDATE()
 FROM dbo.patient_registry
 WHERE patient_id IS NOT NULL;
+GO
 
-DECLARE @rows_patient INT = @@ROWCOUNT;
-PRINT '============================================================';
-PRINT '  SUCCESS: dim_patient_registry DATA CLEANING COMPLETE      ';
-PRINT '  Total Formatted Rows Loaded: ' + CAST(@rows_patient AS VARCHAR(10));
-PRINT '============================================================';
+-- Data Cleaning Enhancement: Build or modify the virtual presentation layer with complete Proper Case standardization
+CREATE OR ALTER VIEW dbo.vw_dim_patient_registry_presentation AS
+WITH RankedPatients AS (
+    SELECT 
+        patient_key,
+        patient_id,
+        full_name,
+        first_name,
+        last_name,
+        date_of_birth,
+        gender,
+        -- Proper Case Insurance Provider: Capitalize the first letter and lowercase the rest
+        CASE 
+            WHEN UPPER(TRIM(ISNULL(insurance_provider, ''))) IN ('UNKNOWN', 'N/A', '', 'UNINSURED') THEN 'Uninsured' 
+            ELSE UPPER(LEFT(TRIM(insurance_provider), 1)) + LOWER(SUBSTRING(TRIM(insurance_provider), 2, LEN(TRIM(insurance_provider))))
+        END AS insurance_provider,
+        ROW_NUMBER() OVER (
+            PARTITION BY full_name, date_of_birth 
+            ORDER BY patient_key ASC
+        ) AS row_num
+    FROM dbo.dim_patient_registry
+)
+SELECT 
+    patient_key,
+    patient_id,
+    full_name,
+    first_name,
+    last_name,
+    date_of_birth,
+    gender,
+    insurance_provider
+FROM RankedPatients
+WHERE row_num = 1;
 GO
 ```
 
-This pass forces patient identifiers into one consistent uppercase, trimmed format, closing a subtle bug where the same patient could otherwise slip through as two different keys. A printed confirmation message reports exactly how many rows made it through cleanly.
+This pass rebuilds full_name, first_name, and last_name in proper case, so MARY SMITH, mary smith, and Mary SMITH all collapse into one consistent Mary Smith rather than three visually different values. It also adds a presentation view on top of the base table, which is where the real duplicate problem gets solved correctly. Two patients can legitimately share the same name, so the view never treats a matching full_name alone as a duplicate. It only collapses a row down when both full_name and date_of_birth match together, keeping the earliest patient_key and dropping the rest, which correctly separates true duplicate entries from patients who are simply different people with a common name.
 
 ### Cleaning the Billing Invoice Table
 
@@ -498,9 +540,6 @@ CREATE TABLE dbo.fact_clinical_telemetry (
 );
 GO
 ```
-
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/fc6d3ab9-fc2f-4380-8ea8-535e321697b8" />
-
 
 The schema follows a simple star pattern. One dimension table, dim_patient_registry, holds identity and demographic detail at the center. Two fact tables radiate outward, each tied back through a formal foreign key on patient_key. Days overdue and hours to doctor are computed columns, recalculated live on every query rather than stored values, and the foreign key constraint makes an orphaned record structurally impossible from this point forward.
 
