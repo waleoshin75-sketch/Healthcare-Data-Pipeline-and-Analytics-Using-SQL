@@ -242,6 +242,7 @@ CREATE TABLE dbo.fact_clinical_telemetry (
         FOREIGN KEY (patient_key) REFERENCES dbo.dim_patient_registry(patient_key)
 );
 ```
+<img width="874" height="334" alt="image" src="https://github.com/user-attachments/assets/b962f350-2886-40c0-8ec6-16f44f032c18" />
 
 ## 7. Business Ojectives
 
