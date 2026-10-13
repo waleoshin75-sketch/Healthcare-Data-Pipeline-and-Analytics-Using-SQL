@@ -211,8 +211,7 @@ Star schema with `dim_patient_registry` as the dimension and two fact tables lin
 | `fact_billing_invoices` | `patient_key` | `dim_patient_registry.patient_key` |
 | `fact_clinical_telemetry` | `patient_key` | `dim_patient_registry.patient_key` |
 
-<details>
-<summary>View table definitions</summary>
+### Table Definitions
 
 ```sql
 CREATE TABLE dbo.fact_billing_invoices (
@@ -243,9 +242,8 @@ CREATE TABLE dbo.fact_clinical_telemetry (
         FOREIGN KEY (patient_key) REFERENCES dbo.dim_patient_registry(patient_key)
 );
 ```
-</details>
 
-## 7. Business Analysis
+## 7. Business Ojectives
 
 | # | Objective | Technique |
 |---|---|---|
@@ -413,7 +411,7 @@ ORDER BY insurer_collection_speed_rank ASC;
 ```
 </details>
 
-### Data Visualization and Interpretation
+### 8. Data Visualization and Interpretation
 
 The cleaned SQL views feed a Power BI dashboard in two pages.
 
